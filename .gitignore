@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# UV
+.python-version
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment
+.env
+.env.local
+
+# Data (generated - can be regenerated via setup_data.py)
+backend/data/insurance.db
+backend/data/providers.csv
+backend/data/docs/
+
+# Logs
+backend/logs/
+
+# ChromaDB
+backend/data/chroma_db/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Streamlit
+.streamlit/
