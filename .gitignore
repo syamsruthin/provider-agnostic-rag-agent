@@ -38,6 +38,9 @@ backend/logs/
 # ChromaDB
 backend/data/chroma_db/
 
+# Memory (SQLite conversation history)
+backend/data/memory.db
+
 # OS
 .DS_Store
 Thumbs.db

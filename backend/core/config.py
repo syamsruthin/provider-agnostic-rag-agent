@@ -21,6 +21,7 @@ LOGS_DIR = BACKEND_DIR / "logs"
 DB_PATH = DATA_DIR / "insurance.db"
 CSV_PATH = DATA_DIR / "providers.csv"
 CHROMA_DIR = DATA_DIR / "chroma_db"
+MEMORY_DB_PATH = DATA_DIR / "memory.db"
 
 # ---------------------------------------------------------------------------
 # Groq / LLM

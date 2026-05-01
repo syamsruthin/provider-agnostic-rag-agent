@@ -19,7 +19,7 @@
 - [x] **Query Re-writer**: Implement a step to de-alias user input (e.g., "Texas" -> "TX").
 - [x] **Router**: Implement the LLM routing logic based on the TechSpecs prompt.
 - [x] **Trace Logger**: Create the `Logger` class to handle async JSONL writes and Markdown file generation in `backend/logs/`.
-- [x] **Memory**: Implement `window_buffer_memory` to keep the last 5 exchanges.
+- [x] **Memory**: Implement `WindowBufferMemory` backed by SQLite (`memory.db`) — persists conversation history across restarts, window of last 5 exchanges per session.
 - [x] **Orchestrator**: Full pipeline (Rewrite → Route → Execute → Synthesize) with tracing + memory.
 - **Commit**: `feat: agent orchestration and tracing system`
 

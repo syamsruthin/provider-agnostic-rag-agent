@@ -7,6 +7,7 @@
 - **Frontend**: Streamlit
 - **Environment**: UV (Python 3.12)
 - **Storage**: SQLite3, ChromaDB, local CSV.
+- **Memory**: SQLite-backed conversation persistence (`memory.db`).
 
 ## 2. Modular Tool Architecture
 
@@ -67,6 +68,21 @@ Adding a new data source = adding a new config entry + registering it in the too
 - **Files**: `exclusions.md`, `rights.md`, `claims.md`.
 - **Vector Engine**: ChromaDB (all-MiniLM-L6-v2 embeddings).
 - **Keyword Engine**: RankBM25.
+
+### D. Conversation Memory (SQLite)
+**Database**: `memory.db`  
+**Table**: `conversation_history`
+- `id` (INTEGER, PK, AUTOINCREMENT)
+- `session_id` (TEXT, NOT NULL, INDEXED)
+- `turn_index` (INTEGER, NOT NULL): Sequential turn counter per session.
+- `role` (TEXT, NOT NULL): `'user'` or `'assistant'`
+- `content` (TEXT, NOT NULL): The message content.
+- `created_at` (TEXT, NOT NULL): ISO-8601 timestamp.
+
+The `WindowBufferMemory` class reads only the **last N turns** (default 5 exchanges = 10 rows) per session using `ORDER BY turn_index DESC LIMIT`. This provides:
+- **Persistence**: Conversations survive server restarts.
+- **Scalability**: Old turns are retained for auditing but not loaded into context.
+- **Concurrency**: SQLite WAL mode supports concurrent reads from FastAPI workers.
 
 ## 4. Agent Prompt Engineering
 
