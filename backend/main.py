@@ -2,6 +2,7 @@
 HealthGuard Agentic RAG — FastAPI Backend
 ==========================================
 Entry point for the backend API server.
+Wires the /chat endpoint to the full orchestration pipeline.
 """
 
 import os
@@ -9,7 +10,7 @@ import uuid
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -21,13 +22,13 @@ load_dotenv()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup: verify data files exist. Shutdown: cleanup."""
+    """Startup: verify data files, warm up RAG index. Shutdown: cleanup."""
     from pathlib import Path
+    from backend.core.config import DATA_DIR, LOGS_DIR
 
-    data_dir = Path(__file__).parent / "data"
-    db_path = data_dir / "insurance.db"
-    csv_path = data_dir / "providers.csv"
-    docs_dir = data_dir / "docs"
+    db_path = DATA_DIR / "insurance.db"
+    csv_path = DATA_DIR / "providers.csv"
+    docs_dir = DATA_DIR / "docs"
 
     missing = []
     if not db_path.exists():
@@ -43,6 +44,17 @@ async def lifespan(app: FastAPI):
             f"   Missing: {missing}"
         )
 
+    # Ensure logs directory exists
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Warm up the RAG index (downloads embedding model + indexes docs)
+    try:
+        from backend.agents.rag_agent import index_documents
+        count = index_documents()
+        print(f"✅ RAG index ready — {count} chunks")
+    except Exception as e:
+        print(f"⚠️  RAG index warm-up failed: {e}")
+
     print("🚀 HealthGuard API started.")
     yield
     print("👋 HealthGuard API shutdown.")
@@ -54,7 +66,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="HealthGuard Agentic RAG",
     description="Multi-modal health insurance assistant powered by Groq LLama-3",
-    version="0.1.0",
+    version="0.2.0",
     lifespan=lifespan,
 )
 
@@ -86,34 +98,65 @@ class ChatResponse(BaseModel):
     trace_markdown: str = ""
 
 
+class HistoryResponse(BaseModel):
+    session_id: str
+    exchanges: list[dict]
+    total: int
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
 @app.get("/health")
 async def health_check():
-    return {"status": "ok", "service": "healthguard-api"}
+    return {"status": "ok", "service": "healthguard-api", "version": "0.2.0"}
 
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
     """
     Main chat endpoint.
-    Accepts user_input and session_id, routes to agents, returns synthesized answer.
-    (Stub — will be implemented in Milestone 2-3)
+    Accepts user_input and session_id, runs the full orchestration pipeline
+    (Rewrite → Route → Execute → Synthesize), returns the answer with trace.
     """
-    trace_id = str(uuid.uuid4())
+    from backend.agents.orchestrator import process_query
 
-    return ChatResponse(
-        session_id=request.session_id,
-        trace_id=trace_id,
-        answer=(
-            f"🏗️ HealthGuard is under construction. "
-            f"Your question: '{request.user_input}' "
-            f"(session: {request.session_id[:8]}..., trace: {trace_id[:8]}...)"
-        ),
-        tools_used=[],
-        trace_markdown="*Trace will be generated once agents are implemented.*",
+    try:
+        result = process_query(
+            user_input=request.user_input,
+            session_id=request.session_id,
+        )
+        return ChatResponse(
+            session_id=result["session_id"],
+            trace_id=result["trace_id"],
+            answer=result["answer"],
+            tools_used=result["tools_used"],
+            trace_markdown=result["trace_markdown"],
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Agent error: {str(e)}")
+
+
+@app.get("/history/{session_id}", response_model=HistoryResponse)
+async def get_history(session_id: str):
+    """Retrieve conversation history for a session."""
+    from backend.core.memory import memory
+
+    exchanges = memory.get_full_history(session_id)
+    return HistoryResponse(
+        session_id=session_id,
+        exchanges=exchanges,
+        total=len(exchanges),
     )
+
+
+@app.delete("/history/{session_id}")
+async def clear_history(session_id: str):
+    """Clear conversation history for a session."""
+    from backend.core.memory import memory
+
+    memory.clear(session_id)
+    return {"status": "cleared", "session_id": session_id}
 
 
 # ---------------------------------------------------------------------------
