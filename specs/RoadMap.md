@@ -16,10 +16,11 @@
 - **Commit**: `feat: core tools for sql, csv, and hybrid rag`
 
 ## Milestone 3: Agentic Logic & Tracing (Day 3)
-- [ ] **Query Re-writer**: Implement a step to de-alias user input (e.g., "Texas" -> "TX").
-- [ ] **Router**: Implement the LLM routing logic based on the TechSpecs prompt.
-- [ ] **Trace Logger**: Create the `Logger` class to handle async JSONL writes and Markdown file generation in `backend/logs/`.
-- [ ] **Memory**: Implement `window_buffer_memory` to keep the last 5 exchanges.
+- [x] **Query Re-writer**: Implement a step to de-alias user input (e.g., "Texas" -> "TX").
+- [x] **Router**: Implement the LLM routing logic based on the TechSpecs prompt.
+- [x] **Trace Logger**: Create the `Logger` class to handle async JSONL writes and Markdown file generation in `backend/logs/`.
+- [x] **Memory**: Implement `window_buffer_memory` to keep the last 5 exchanges.
+- [x] **Orchestrator**: Full pipeline (Rewrite → Route → Execute → Synthesize) with tracing + memory.
 - **Commit**: `feat: agent orchestration and tracing system`
 
 ## Milestone 4: API & UI Integration (Day 4)
