@@ -24,5 +24,5 @@ uv run streamlit run frontend/app.py
 
 - **Backend**: FastAPI with async agents (Router → SQL / CSV / RAG)
 - **Frontend**: Streamlit chat UI with live trace sidebar
-- **LLM**: Groq API (`llama3-70b-8192`)
+- **LLM**: Groq API (`llama-3.3-70b-versatile`)
 - **Retrieval**: Hybrid BM25 + ChromaDB vector search
