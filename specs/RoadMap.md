@@ -1,16 +1,17 @@
 # Roadmap & Implementation Milestones
 
 ## Milestone 1: Environment & Synthetic Data (Day 1)
-- [ ] Initialize `uv` project and directory structure.
-- [ ] **SQL**: Create `generate_sql.py` to populate `insurance.db` with 50 rows of plan data.
-- [ ] **CSV**: Create `generate_csv.py` to populate `providers.csv` with 500 rows, ensuring diverse `city` and `state` distribution.
-- [ ] **Text**: Create 3 markdown files with 2000+ words of insurance policy jargon.
+- [x] Initialize `uv` project and directory structure.
+- [x] **SQL**: Create `setup_data.py` to populate `insurance.db` with 50 rows of plan data.
+- [x] **CSV**: Populate `providers.csv` with 500 rows, ensuring diverse `city` and `state` distribution.
+- [x] **Text**: Create 3 markdown files with 2000+ words of insurance policy jargon.
 - **Commit**: `feat: init environment and synthetic data generation`
 
-## Milestone 2: The Tooling Layer (Day 2)
-- [ ] **SQL Tool**: Build a function that takes NL, generates SQL via Groq, executes, and returns results.
-- [ ] **Python Tool**: Build a function that uses Groq to write `df.query()` or filtering logic for the CSV, explicitly handling string matches for `city` and `state`.
-- [ ] **Hybrid RAG**: Implement ChromaDB indexing + BM25 search. Create a reranker logic to merge results.
+## Milestone 2: The Modular Tooling Layer (Day 2)
+- [x] **Execution Engines** (`core/tools.py`): Build data-source-agnostic `SQLExecutionEngine` and `PythonExecutionEngine` classes that accept schema config at init time. These engines are reusable for any SQLite DB or CSV/DataFrame.
+- [x] **Data Source Configs** (`core/data_sources.py`): Define `PLAN_BENEFITS_SOURCE` (SQL) and `PROVIDERS_SOURCE` (CSV) with schema, paths, and system prompts.
+- [x] **Agent Wrappers** (`agents/sql_agent.py`, `agents/csv_agent.py`): Thin wrappers that instantiate the engines with the appropriate data source config.
+- [x] **Hybrid RAG**: Implement ChromaDB indexing + BM25 search. Create a reranker logic to merge results.
 - **Test Case**: `assert python_tool("Find PCPs in Seattle, WA")` returns the correct filtered DataFrame.
 - **Commit**: `feat: core tools for sql, csv, and hybrid rag`
 
@@ -32,4 +33,5 @@
 ## Milestone 5: Quality Assurance (Day 5)
 - [ ] **Test**: Complex query: "I need a Dermatologist in Austin, TX under a plan with a deductible less than $1000." (Triggers Multi-Tool logic: CSV for location/specialty + SQL for plan deductible).
 - [ ] **Log Validation**: Ensure the Trace MD file clearly explains why the agent combined SQL and CSV tools.
+- [ ] **Extensibility**: Validate adding a new data source (e.g., `pharmacies.csv`) requires only config + prompt changes, zero engine modification.
 - **Commit**: `docs: final documentation and demo-ready state`
