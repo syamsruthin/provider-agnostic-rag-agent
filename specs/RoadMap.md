@@ -33,7 +33,8 @@
 - **Commit**: `feat: fastapi backend and streamlit frontend`
 
 ## Milestone 5: Quality Assurance (Day 5)
-- [ ] **Test**: Complex query: "I need a Dermatologist in Austin, TX under a plan with a deductible less than $1000." (Triggers Multi-Tool logic: CSV for location/specialty + SQL for plan deductible).
-- [ ] **Log Validation**: Ensure the Trace MD file clearly explains why the agent combined SQL and CSV tools.
-- [ ] **Extensibility**: Validate adding a new data source (e.g., `pharmacies.csv`) requires only config + prompt changes, zero engine modification.
+- [x] **Test**: Complex query: "I need a Dermatologist in Austin, TX under a plan with a deductible less than $1000." — ✅ Triggers MULTI_TOOL → SQL_TOOL + CSV_TOOL. Answer includes both Platinum plans (<$1000 deductible) and Austin dermatologists.
+- [x] **Log Validation**: ✅ Trace MD shows 4-step report: User Query → Router Decision (MULTI_TOOL reasoning) → Tool Execution (SQL + CSV code/results) → Synthesis. JSONL has 5 structured entries.
+- [x] **Extensibility**: ✅ Validated with `pharmacies.csv` (PythonExecutionEngine) and `claims.db` (SQLExecutionEngine) — zero engine code changes, only config + prompt.
+- **Test Script**: `backend/scripts/test_qa.py` — 5/5 tests pass.
 - **Commit**: `docs: final documentation and demo-ready state`
