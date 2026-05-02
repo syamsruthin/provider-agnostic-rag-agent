@@ -40,6 +40,7 @@ backend/data/chroma_db/
 
 # Memory (SQLite conversation history)
 backend/data/memory.db
+backend/data/checkpoints.db*
 
 # OS
 .DS_Store

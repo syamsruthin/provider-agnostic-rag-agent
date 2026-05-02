@@ -16,11 +16,11 @@
 - **Commit**: `feat: core tools for sql, csv, and hybrid rag`
 
 ## Milestone 3: Agentic Logic & Tracing (Day 3)
-- [x] **Query Re-writer**: Implement a step to de-alias user input (e.g., "Texas" -> "TX").
+- [x] ~~**Query Re-writer**: Implement a rule-based step to de-alias user input (e.g., "Texas" -> "TX").~~ (Replaced by LLM-based rewriter in Milestone 6)
 - [x] **Router**: Implement the LLM routing logic based on the TechSpecs prompt.
 - [x] **Trace Logger**: Create the `Logger` class to handle async JSONL writes and Markdown file generation in `backend/logs/`.
-- [x] **Memory**: Implement `WindowBufferMemory` backed by SQLite (`memory.db`) — persists conversation history across restarts, window of last 5 exchanges per session.
-- [x] **Orchestrator**: Full pipeline (Rewrite → Route → Execute → Synthesize) with tracing + memory.
+- [x] ~~**Memory**: Implement `WindowBufferMemory` backed by SQLite (`memory.db`).~~
+- [x] **Orchestrator**: Full pipeline (Rewrite → Route → Execute → Synthesize) with tracing.
 - **Commit**: `feat: agent orchestration and tracing system`
 
 ## Milestone 4: API & UI Integration (Day 4)
@@ -38,3 +38,38 @@
 - [x] **Extensibility**: ✅ Validated with `pharmacies.csv` (PythonExecutionEngine) and `claims.db` (SQLExecutionEngine) — zero engine code changes, only config + prompt.
 - **Test Script**: `backend/scripts/test_qa.py` — 5/5 tests pass.
 - **Commit**: `docs: final documentation and demo-ready state`
+
+## Milestone 6: LangGraph Refactor (Day 6)
+- [x] **LangGraph StateGraph**: Replaced the custom `process_query()` orchestrator with a native LangGraph `StateGraph` containing 4 nodes: `rewrite → route → execute → synthesize`.
+- [x] **Memory → LangGraph Checkpointer**: Removed custom `WindowBufferMemory` class (`core/memory.py`). Replaced with `langgraph-checkpoint-sqlite` `SqliteSaver` — conversation persistence is now automatic via `thread_id` on graph invocation.
+- [x] **State Schema**: Defined `HealthGuardState(TypedDict)` with `messages` (LangGraph `add_messages`), routing decisions, tool results, and trace data — all flowing through the graph.
+- [x] **Dependency Update**: Added `langgraph-checkpoint-sqlite` to `pyproject.toml`.
+- [x] **FastAPI Integration**: Updated `/chat`, `/history`, and `/history/{id}` endpoints to use the compiled LangGraph graph and checkpointer.
+- [x] **No custom agents**: Removed all custom agent/orchestrator classes. The graph IS the orchestrator.
+- [x] **LLM Query Rewriter**: Replaced the rule-based `rewrite_query()` with an LLM-powered rewriter that also performs conversational memory coreference resolution (resolves pronouns like 'those' based on chat history).
+- **Commit**: `refactor: migrate to native LangGraph StateGraph with SqliteSaver checkpointer`
+
+## Milestone 7: Fully Agentic Architecture (Day 7)
+- [x] **Conditional Routing** (`add_conditional_edges`): Replaced the single generic `execute` node with dedicated `execute_sql`, `execute_csv`, `execute_rag`, and `execute_multi` nodes. The `route` node dispatches via `add_conditional_edges` based on `route_decision`.
+- [x] **Self-Correction Retry Loop**: If SQL/Python code generation fails, the graph loops back to the same execute node (max 2 retries) with the error message injected as context for the LLM to self-correct.
+- [x] **Answer Validation Node**: After synthesis, an LLM `validate` node checks if the answer fully addresses the user's question. Returns PASS/FAIL.
+- [x] **ReAct Loop**: If validation returns FAIL and `react_count < 2`, the graph loops back to `route` to try a different approach (e.g., different tool, refined query). This is the Reason+Act iterative pattern.
+- [x] **Streaming Endpoint**: Added `POST /chat/stream` SSE endpoint using LangGraph's `astream_events`. Frontend receives real-time progress events (node starts, tool results, final answer).
+- **Commit**: `feat: fully agentic graph with retry, validation, ReAct, and streaming`
+
+## Milestone 8: LLM Abstraction Layer (Day 7)
+- [x] **Provider-Agnostic LLM Module** (`core/llm.py`): Created a single `llm_completion()` function that all LLM calls go through. No file directly imports Groq/OpenAI/etc.
+- [x] **Config-Driven Provider**: `LLM_PROVIDER` env var switches between `groq`, `openai`, `ollama`, or any OpenAI-compatible endpoint. Default: `groq`.
+- [x] **Decoupled All Consumers**: Removed direct `from groq import Groq` from `orchestrator.py`, `router.py`, and `tools.py`. All now call `llm_completion()`.
+- [x] **Per-Node Tracing**: Enhanced trace logging to capture input/output/reasoning/duration at every graph node.
+- **Commit**: `refactor: extract LLM abstraction layer for provider-agnostic inference`
+
+## Milestone 9: Strict Guardrails Framework (Day 8)
+- [x] **Input Guardrails**: Implemented `query_validator` module in `rewrite_node` to reject out-of-scope, non-enterprise queries before tool execution.
+- [x] **Context Guardrails**: Added `context_validator` in `synthesize_node` to ensure retrieved data is sufficient before calling the LLM.
+- [x] **Output Guardrails**: Added `response_validator` in `validate_node` to detect hallucinations and prevent the use of external/pretrained knowledge.
+- [x] **Graph Bypass Logic**: Updated `orchestrator.py` to route `FAIL_GUARDRAIL` states directly to `finalize` to skip unneeded processing.
+- [x] **Standardized Fallbacks**: Unified fallback responses for out-of-scope, no-data, and insufficient-context scenarios.
+- [x] **Memory-Aware Validation**: Integrated conversation history into the guardrail contexts so valid follow-up answers are not falsely flagged as hallucinations.
+- [x] **Robust Logic Derivation**: Upgraded context and output guardrails to analyze executed SQL/Python code and user queries, eliminating false-positive hallucination flags on strictly filtered data.
+- **Commit**: `feat: implement strict 3-layer input, context, and output guardrails`

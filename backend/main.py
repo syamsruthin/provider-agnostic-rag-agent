@@ -2,9 +2,10 @@
 HealthGuard Agentic RAG — FastAPI Backend
 ==========================================
 Entry point for the backend API server.
-Wires the /chat endpoint to the full orchestration pipeline.
+Wires /chat and /chat/stream endpoints to the agentic LangGraph pipeline.
 """
 
+import json
 import os
 import uuid
 from contextlib import asynccontextmanager
@@ -12,6 +13,7 @@ from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 load_dotenv()
@@ -55,7 +57,7 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"⚠️  RAG index warm-up failed: {e}")
 
-    print("🚀 HealthGuard API started.")
+    print("🚀 HealthGuard API started (Agentic LangGraph pipeline).")
     yield
     print("👋 HealthGuard API shutdown.")
 
@@ -65,8 +67,8 @@ async def lifespan(app: FastAPI):
 # ---------------------------------------------------------------------------
 app = FastAPI(
     title="HealthGuard Agentic RAG",
-    description="Multi-modal health insurance assistant powered by Groq LLama-3",
-    version="0.2.0",
+    description="Fully agentic health insurance assistant — conditional routing, retry loops, validation, ReAct, streaming",
+    version="0.4.0",
     lifespan=lifespan,
 )
 
@@ -86,7 +88,7 @@ class ChatRequest(BaseModel):
     user_input: str = Field(..., min_length=1, description="The user's question.")
     session_id: str = Field(
         default_factory=lambda: str(uuid.uuid4()),
-        description="Session ID for conversation continuity.",
+        description="Session ID for conversation continuity (maps to LangGraph thread_id).",
     )
 
 
@@ -96,6 +98,9 @@ class ChatResponse(BaseModel):
     answer: str
     tools_used: list[str] = []
     trace_markdown: str = ""
+    retry_count: int = 0
+    react_count: int = 0
+    validation_result: str = ""
 
 
 class HistoryResponse(BaseModel):
@@ -109,15 +114,15 @@ class HistoryResponse(BaseModel):
 # ---------------------------------------------------------------------------
 @app.get("/health")
 async def health_check():
-    return {"status": "ok", "service": "healthguard-api", "version": "0.2.0"}
+    return {"status": "ok", "service": "healthguard-api", "version": "0.4.0"}
 
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
     """
-    Main chat endpoint.
-    Accepts user_input and session_id, runs the full orchestration pipeline
-    (Rewrite → Route → Execute → Synthesize), returns the answer with trace.
+    Main chat endpoint (synchronous).
+    Runs the full agentic pipeline: Rewrite → Route → Execute (with retry)
+    → Synthesize → Validate (with ReAct loop) → Finalize.
     """
     from backend.agents.orchestrator import process_query
 
@@ -132,17 +137,49 @@ async def chat(request: ChatRequest):
             answer=result["answer"],
             tools_used=result["tools_used"],
             trace_markdown=result["trace_markdown"],
+            retry_count=result["retry_count"],
+            react_count=result["react_count"],
+            validation_result=result["validation_result"],
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Agent error: {str(e)}")
 
 
+@app.post("/chat/stream")
+async def chat_stream(request: ChatRequest):
+    """
+    Streaming chat endpoint (SSE).
+    Returns Server-Sent Events as each graph node starts/completes.
+    Clients receive real-time progress updates.
+    """
+    from backend.agents.orchestrator import astream_query
+
+    async def event_generator():
+        try:
+            async for event in astream_query(
+                user_input=request.user_input,
+                session_id=request.session_id,
+            ):
+                yield f"data: {json.dumps(event)}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'event': 'error', 'detail': str(e)})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        },
+    )
+
+
 @app.get("/history/{session_id}", response_model=HistoryResponse)
 async def get_history(session_id: str):
-    """Retrieve conversation history for a session."""
-    from backend.core.memory import memory
+    """Retrieve conversation history for a session from LangGraph checkpointer."""
+    from backend.agents.orchestrator import get_thread_history
 
-    exchanges = memory.get_full_history(session_id)
+    exchanges = get_thread_history(session_id)
     return HistoryResponse(
         session_id=session_id,
         exchanges=exchanges,
@@ -153,9 +190,9 @@ async def get_history(session_id: str):
 @app.delete("/history/{session_id}")
 async def clear_history(session_id: str):
     """Clear conversation history for a session."""
-    from backend.core.memory import memory
+    from backend.agents.orchestrator import clear_thread_history
 
-    memory.clear(session_id)
+    clear_thread_history(session_id)
     return {"status": "cleared", "session_id": session_id}
 
 

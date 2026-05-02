@@ -1,12 +1,20 @@
 """
-Trace Logger — JSONL machine logs + Markdown human-readable reports
-====================================================================
-Every agent interaction gets a trace_id. The logger writes:
-1. Structured JSONL entries (one per component step) for machine auditing.
-2. A Markdown report per session/trace for human review in the UI sidebar.
+Trace Logger — Per-Node Step Tracing
+======================================
+Every graph node logs its own step as it executes. Each step captures:
+  - Step number & node name
+  - Timestamp (UTC)
+  - Input / Output / Reasoning
+  - Duration
+  - Any metadata (retry count, error context, etc.)
+
+Produces:
+  1. JSONL machine log ({session_id}.jsonl)
+  2. Markdown human-readable report (trace_{trace_id}.md)
 """
 
 import json
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -15,76 +23,74 @@ from backend.core.config import LOGS_DIR
 
 class TraceLogger:
     """
-    Per-trace logger that accumulates steps and writes both JSONL and Markdown.
+    Per-trace logger that accumulates per-node steps and writes
+    both JSONL (machine) and Markdown (human) logs.
 
-    Usage:
+    Usage (called from each graph node):
         logger = TraceLogger(trace_id="abc-123", session_id="sess-456")
-        logger.log("Router", input="user query", output="SQL_TOOL", reasoning="...")
-        logger.log("SQLAgent", input="...", output="...", code="SELECT ...")
-        logger.set_user_query("What plans have low deductibles?")
-        logger.set_rewrite("What plans have deductibles < $1000?")
-        logger.set_router_decision("SQL_TOOL", "Query is about plan costs")
-        logger.set_tool_execution("SQL_TOOL", code="SELECT ...", result="...")
-        logger.set_synthesis("Based on the query results...")
-        logger.flush()  # writes both files
+
+        logger.step("rewrite",
+            input="Find me a heart doctor in Texas",
+            output="Find me a Cardiologist in TX",
+            reasoning="LLM normalized: heart doctor → Cardiologist, Texas → TX")
+
+        logger.step("route",
+            input="Find me a Cardiologist in TX",
+            output="CSV_TOOL",
+            reasoning="Doctor search by specialty and location",
+            metadata={"tools_list": ["CSV_TOOL"]})
+
+        logger.flush()
     """
 
     def __init__(self, trace_id: str, session_id: str):
         self.trace_id = trace_id
         self.session_id = session_id
-        self._entries: list[dict] = []
-
-        # Markdown report sections
-        self._user_query: str = ""
-        self._rewrite: str = ""
-        self._router_decision: str = ""
-        self._router_reason: str = ""
-        self._tool_executions: list[dict] = []
-        self._synthesis: str = ""
+        self._steps: list[dict] = []
+        self._step_counter = 0
+        self._start_time = time.monotonic()
 
         # Ensure logs dir exists
         LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
     # -----------------------------------------------------------------
-    # Structured JSONL logging
+    # Core: log a single step
     # -----------------------------------------------------------------
-    def log(self, component: str, **kwargs) -> None:
+    def step(
+        self,
+        node: str,
+        *,
+        input: str = "",
+        output: str = "",
+        reasoning: str = "",
+        duration_ms: float = 0,
+        metadata: dict | None = None,
+    ) -> None:
         """
-        Append a structured log entry for the given component.
-        kwargs can include: input, output, reasoning, code, error, etc.
+        Log a single graph node execution step.
+
+        Args:
+            node: Name of the graph node (e.g., "rewrite", "route", "execute_sql")
+            input: What the node received as input
+            output: What the node produced
+            reasoning: Why the node made the decisions it did
+            duration_ms: How long the step took (in milliseconds)
+            metadata: Any additional key-value data (retry count, error, tools_list, etc.)
         """
+        self._step_counter += 1
         entry = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "trace_id": self.trace_id,
             "session_id": self.session_id,
-            "component": component,
-            **kwargs,
+            "step": self._step_counter,
+            "node": node,
+            "input": input,
+            "output": output,
+            "reasoning": reasoning,
+            "duration_ms": round(duration_ms, 1),
+            "metadata": metadata or {},
         }
-        self._entries.append(entry)
-
-    # -----------------------------------------------------------------
-    # Markdown report builders
-    # -----------------------------------------------------------------
-    def set_user_query(self, query: str) -> None:
-        self._user_query = query
-
-    def set_rewrite(self, rewritten: str) -> None:
-        self._rewrite = rewritten
-
-    def set_router_decision(self, tool: str, reason: str) -> None:
-        self._router_decision = tool
-        self._router_reason = reason
-
-    def set_tool_execution(self, tool_name: str, code: str = "", result: str = "", error: str = "") -> None:
-        self._tool_executions.append({
-            "tool": tool_name,
-            "code": code,
-            "result": result,
-            "error": error,
-        })
-
-    def set_synthesis(self, synthesis: str) -> None:
-        self._synthesis = synthesis
+        self._steps.append(entry)
 
     # -----------------------------------------------------------------
     # Flush to disk
@@ -96,91 +102,153 @@ class TraceLogger:
         return jsonl_path, md_path
 
     def _write_jsonl(self) -> Path:
-        """Append all log entries to the session JSONL file."""
+        """Append all step entries to the session JSONL file."""
         jsonl_path = LOGS_DIR / f"{self.session_id}.jsonl"
         with open(jsonl_path, "a") as f:
-            for entry in self._entries:
+            for entry in self._steps:
                 f.write(json.dumps(entry, default=str) + "\n")
         return jsonl_path
 
     def _write_markdown(self) -> Path:
-        """Write the human-readable Markdown trace report."""
+        """Write the full human-readable Markdown trace report."""
+        total_duration = (time.monotonic() - self._start_time) * 1000  # ms
         md_path = LOGS_DIR / f"trace_{self.trace_id[:8]}.md"
+
         lines = [
-            f"# Trace Report: `{self.trace_id[:8]}...`",
-            f"**Session**: `{self.session_id[:8]}...`  ",
-            f"**Timestamp**: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}",
+            f"# Trace Report: `{self.trace_id[:8]}`",
+            f"**Session**: `{self.session_id[:8]}...`  |  "
+            f"**Timestamp**: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}  |  "
+            f"**Total Steps**: {self._step_counter}  |  "
+            f"**Total Duration**: {total_duration:.0f}ms",
             "",
             "---",
             "",
         ]
 
-        # Step 0: User Query
-        lines.append("## User Query")
-        lines.append(f"> {self._user_query}" if self._user_query else "> *(not set)*")
-        lines.append("")
+        for s in self._steps:
+            step_num = s["step"]
+            node = s["node"]
+            duration = s["duration_ms"]
+            meta = s.get("metadata", {})
 
-        # Step 1: Rewrite
-        lines.append("## Step 1: Query Rewrite")
-        if self._rewrite and self._rewrite != self._user_query:
-            lines.append(f"**Original**: {self._user_query}  ")
-            lines.append(f"**Rewritten**: {self._rewrite}")
-        else:
-            lines.append("*No rewrite needed — query used as-is.*")
-        lines.append("")
+            # Header with timing
+            header = f"## Step {step_num}: {node}"
+            if meta.get("attempt"):
+                header += f" — Attempt {meta['attempt']}"
+            if meta.get("react_iteration"):
+                header += f" (ReAct iteration {meta['react_iteration']})"
+            if duration > 0:
+                header += f"  `({duration:.0f}ms)`"
+            lines.append(header)
 
-        # Step 2: Router Decision
-        lines.append("## Step 2: Router Decision")
-        lines.append(f"**Tool Selected**: `{self._router_decision}`  ")
-        lines.append(f"**Reasoning**: {self._router_reason}")
-        lines.append("")
+            # Input
+            if s["input"]:
+                input_text = s["input"]
+                if len(input_text) > 500:
+                    input_text = input_text[:500] + "..."
+                lines.append(f"- **Input**: {input_text}")
 
-        # Step 3: Tool Execution(s)
-        lines.append("## Step 3: Tool Execution")
-        if self._tool_executions:
-            for i, tex in enumerate(self._tool_executions, 1):
-                lines.append(f"### {i}. {tex['tool']}")
-                if tex["code"]:
-                    lines.append("**Generated Code/SQL**:")
-                    lines.append(f"```\n{tex['code']}\n```")
-                if tex["result"]:
-                    result_preview = tex["result"][:1000]
-                    lines.append("**Result**:")
-                    lines.append(f"```\n{result_preview}\n```")
-                if tex["error"]:
-                    lines.append(f"**Error**: ⚠️ {tex['error']}")
-                lines.append("")
-        else:
-            lines.append("*No tool execution recorded.*")
+            # Output
+            if s["output"]:
+                output_text = s["output"]
+                if "\n" in output_text or len(output_text) > 200:
+                    # Multi-line output in code block
+                    preview = output_text[:1500]
+                    lines.append(f"- **Output**:")
+                    lines.append(f"```\n{preview}\n```")
+                else:
+                    lines.append(f"- **Output**: {output_text}")
+
+            # Reasoning / Decision
+            if s["reasoning"]:
+                lines.append(f"- **Reasoning**: {s['reasoning']}")
+
+            # Metadata (key-value pairs)
+            for key, val in meta.items():
+                if key in ("attempt", "react_iteration"):
+                    continue  # already in header
+                if isinstance(val, str) and len(val) > 300:
+                    lines.append(f"- **{_format_key(key)}**:")
+                    lines.append(f"```\n{val[:1000]}\n```")
+                elif isinstance(val, list):
+                    lines.append(f"- **{_format_key(key)}**: {', '.join(str(v) for v in val)}")
+                elif val is not None and val != "":
+                    lines.append(f"- **{_format_key(key)}**: {val}")
+
             lines.append("")
-
-        # Step 4: Synthesis
-        lines.append("## Step 4: Final Synthesis")
-        lines.append(self._synthesis if self._synthesis else "*No synthesis recorded.*")
-        lines.append("")
 
         md_content = "\n".join(lines)
         md_path.write_text(md_content)
         return md_path
 
+    # -----------------------------------------------------------------
+    # In-memory Markdown (for API response / UI sidebar)
+    # -----------------------------------------------------------------
     def get_markdown_report(self) -> str:
-        """Return the Markdown report as a string (for API response), without writing to disk."""
-        # Build in-memory and return
-        lines = []
-        lines.append(f"**Query**: {self._user_query}")
+        """Return a compact Markdown report for the API response (UI sidebar)."""
+        total_duration = (time.monotonic() - self._start_time) * 1000
+        lines = [
+            f"**Trace**: `{self.trace_id[:8]}` | "
+            f"**Steps**: {self._step_counter} | "
+            f"**Duration**: {total_duration:.0f}ms",
+            "",
+        ]
 
-        if self._rewrite and self._rewrite != self._user_query:
-            lines.append(f"**Rewrite**: {self._rewrite}")
+        for s in self._steps:
+            node = s["node"]
+            meta = s.get("metadata", {})
+            duration = s["duration_ms"]
 
-        lines.append(f"**Router** → `{self._router_decision}`: {self._router_reason}")
+            # Compact one-liner per step
+            prefix = f"**{s['step']}. {node}**"
+            if duration > 0:
+                prefix += f" `({duration:.0f}ms)`"
 
-        for tex in self._tool_executions:
-            tool_label = tex["tool"]
-            if tex["code"]:
-                lines.append(f"**{tool_label} Code**: `{tex['code'][:200]}`")
-            if tex["result"]:
-                lines.append(f"**{tool_label} Result**: {tex['result'][:300]}")
-            if tex["error"]:
-                lines.append(f"**{tool_label} Error**: {tex['error']}")
+            if node == "rewrite":
+                if s["input"] != s["output"] and s["output"]:
+                    lines.append(f"{prefix}: `{s['input']}` → `{s['output']}`")
+                else:
+                    lines.append(f"{prefix}: *(no change)*")
+
+            elif node == "route":
+                lines.append(f"{prefix}: → `{s['output']}` — {s['reasoning']}")
+                if meta.get("tools_list"):
+                    lines.append(f"   Tools: {meta['tools_list']}")
+
+            elif node.startswith("execute"):
+                tool = meta.get("tool", node)
+                if meta.get("error"):
+                    lines.append(f"{prefix}: ⚠️ `{tool}` error: {meta['error']}")
+                else:
+                    code = meta.get("code", "")
+                    if code:
+                        lines.append(f"{prefix}: `{tool}` → `{code[:150]}`")
+                    else:
+                        lines.append(f"{prefix}: `{tool}` → {s['output'][:200]}")
+
+            elif node == "check_retry":
+                lines.append(f"{prefix}: {s['reasoning']}")
+
+            elif node == "synthesize":
+                answer_preview = s["output"][:200] + "..." if len(s["output"]) > 200 else s["output"]
+                lines.append(f"{prefix}: {answer_preview}")
+
+            elif node == "validate":
+                verdict = meta.get("verdict", s["output"])
+                lines.append(f"{prefix}: **{verdict}** — {s['reasoning']}")
+
+            elif node == "react_reroute":
+                lines.append(f"{prefix}: Looping back to route (iteration {meta.get('react_count', '?')})")
+
+            elif node == "finalize":
+                lines.append(f"{prefix}: ✅ Done")
+
+            else:
+                lines.append(f"{prefix}: {s['output'][:200]}")
 
         return "\n".join(lines)
+
+
+def _format_key(key: str) -> str:
+    """Convert snake_case to Title Case for display."""
+    return key.replace("_", " ").title()

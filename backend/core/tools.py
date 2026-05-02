@@ -11,19 +11,13 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import pandas as pd
-from groq import Groq
 
-from backend.core.config import GROQ_API_KEY, GROQ_MODEL
+from backend.core.llm import llm_completion
 
 
 # ---------------------------------------------------------------------------
-# Shared LLM helper
+# Helpers
 # ---------------------------------------------------------------------------
-def _get_groq_client() -> Groq:
-    """Return a Groq client instance."""
-    return Groq(api_key=GROQ_API_KEY)
-
-
 def _strip_code_fences(raw: str) -> str:
     """Remove markdown code fences that LLMs sometimes add despite prompts."""
     if raw.startswith("```"):
@@ -34,10 +28,8 @@ def _strip_code_fences(raw: str) -> str:
 
 
 def _generate_code(system_prompt: str, user_query: str) -> str:
-    """Send a system+user prompt to Groq and return the cleaned response."""
-    client = _get_groq_client()
-    response = client.chat.completions.create(
-        model=GROQ_MODEL,
+    """Send a system+user prompt to the LLM and return the cleaned response."""
+    raw = llm_completion(
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_query},
@@ -45,7 +37,7 @@ def _generate_code(system_prompt: str, user_query: str) -> str:
         temperature=0,
         max_tokens=512,
     )
-    return _strip_code_fences(response.choices[0].message.content.strip())
+    return _strip_code_fences(raw)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -90,14 +82,10 @@ class SQLExecutionEngine:
         if not results:
             return "No results found."
 
-        if len(results) == 1 and len(results[0]) == 1:
-            return str(list(results[0].values())[0])
-
+        from tabulate import tabulate
         headers = list(results[0].keys())
-        lines = [" | ".join(headers), "-" * (sum(len(h) for h in headers) + 3 * (len(headers) - 1))]
-        for row in results:
-            lines.append(" | ".join(str(row.get(h, "")) for h in headers))
-        return "\n".join(lines)
+        rows = [list(r.values()) for r in results]
+        return tabulate(rows, headers=headers, tablefmt="pipe")
 
     def run(self, user_query: str) -> dict:
         """
@@ -185,6 +173,14 @@ class PythonExecutionEngine:
 
     def execute_code(self, code: str, df: pd.DataFrame) -> Any:
         """Execute LLM-generated code in a sandboxed namespace."""
+        
+        # Remove redundant imports that LLMs add which violate the sandbox
+        cleaned_lines = []
+        for line in code.split('\n'):
+            if not line.strip().startswith('import pandas') and not line.strip().startswith('import numpy'):
+                cleaned_lines.append(line)
+        code = '\n'.join(cleaned_lines)
+
         namespace = {"df": df, **self.allowed_modules}
         try:
             exec(code, {"__builtins__": {}}, namespace)
@@ -204,9 +200,9 @@ class PythonExecutionEngine:
         if isinstance(result, pd.DataFrame):
             if result.empty:
                 return "No matching results found."
-            return result.to_string(index=False)
+            return result.to_markdown(index=False)
         elif isinstance(result, pd.Series):
-            return result.to_string()
+            return result.to_markdown(index=False)
         return str(result)
 
     def run(self, user_query: str) -> dict:
@@ -221,9 +217,19 @@ class PythonExecutionEngine:
             code = self.generate_code(user_query)
             result = self.execute_code(code, df)
             formatted = self.format_results(result)
+            
+            # Ensure raw_results is serializable for LangGraph checkpointer
+            serializable_result = result
+            if isinstance(result, pd.DataFrame):
+                serializable_result = result.to_dict(orient="records")
+            elif isinstance(result, pd.Series):
+                serializable_result = result.to_dict()
+            elif hasattr(result, "item"):
+                serializable_result = result.item()
+                
             return {
                 "code": code,
-                "raw_results": result,
+                "raw_results": serializable_result,
                 "formatted": formatted,
                 "error": None,
             }

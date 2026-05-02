@@ -1,7 +1,8 @@
 """
 HealthGuard Agentic RAG — Streamlit Frontend
 =============================================
-Chat interface with live trace sidebar, tool badges, and reasoning toggle.
+Chat interface with per-step trace sidebar, tool badges, agentic status,
+and reasoning toggle.
 """
 
 import uuid
@@ -67,24 +68,22 @@ st.markdown(
     .tool-rag { background: #fef3c7; color: #92400e; }
     .tool-multi { background: #ede9fe; color: #5b21b6; }
 
-    /* Trace sidebar */
-    .trace-container {
-        background: #f8fafc;
-        border: 1px solid #e2e8f0;
-        border-radius: 8px;
-        padding: 1rem;
-        font-size: 0.82rem;
-        line-height: 1.5;
-        max-height: 600px;
-        overflow-y: auto;
+    /* Agentic status badges */
+    .agentic-badge {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 10px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        margin-right: 4px;
+        margin-bottom: 4px;
     }
-    .trace-container h3 { font-size: 0.9rem; color: #334155; margin-top: 0.8rem; }
-    .trace-container code {
-        background: #f1f5f9;
-        padding: 2px 5px;
-        border-radius: 3px;
-        font-size: 0.78rem;
-    }
+    .badge-retry { background: #fff7ed; color: #c2410c; border: 1px solid #fed7aa; }
+    .badge-react { background: #fdf2f8; color: #be185d; border: 1px solid #fbcfe8; }
+    .badge-pass { background: #f0fdf4; color: #15803d; border: 1px solid #bbf7d0; }
+    .badge-fail { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; }
+    .badge-steps { background: #f0f9ff; color: #0369a1; border: 1px solid #bae6fd; }
+    .badge-duration { background: #faf5ff; color: #7e22ce; border: 1px solid #e9d5ff; }
 
     /* Status indicator */
     .status-dot {
@@ -120,6 +119,8 @@ if "messages" not in st.session_state:
     st.session_state.messages = []
 if "traces" not in st.session_state:
     st.session_state.traces = []  # List of trace markdowns
+if "trace_meta" not in st.session_state:
+    st.session_state.trace_meta = []  # List of {tools, trace_id, retry_count, ...}
 if "show_reasoning" not in st.session_state:
     st.session_state.show_reasoning = True
 
@@ -139,6 +140,52 @@ def tool_badges_html(tools: list[str]) -> str:
         label, cls = badge_map.get(t, (t, "tool-multi"))
         badges.append(f'<span class="tool-badge {cls}">{label}</span>')
     return "".join(badges)
+
+
+def agentic_status_html(meta: dict) -> str:
+    """Build HTML badges showing agentic loop status."""
+    badges = []
+
+    # Step count
+    trace_md = meta.get("trace_markdown", "")
+    step_count = trace_md.count("**") // 2  # rough count from markdown bold pairs
+    # Parse step count from the trace header line
+    if "**Steps**:" in trace_md:
+        try:
+            parts = trace_md.split("**Steps**: ")[1]
+            step_count = int(parts.split(" ")[0].split("|")[0].strip())
+        except (IndexError, ValueError):
+            pass
+
+    if step_count > 0:
+        badges.append(f'<span class="agentic-badge badge-steps">📊 {step_count} steps</span>')
+
+    # Duration
+    if "**Duration**:" in trace_md:
+        try:
+            dur_part = trace_md.split("**Duration**: ")[1].split("\n")[0].strip()
+            badges.append(f'<span class="agentic-badge badge-duration">⏱️ {dur_part}</span>')
+        except (IndexError, ValueError):
+            pass
+
+    # Retry count
+    retry = meta.get("retry_count", 0)
+    if retry > 0:
+        badges.append(f'<span class="agentic-badge badge-retry">🔁 {retry} retries</span>')
+
+    # React loops
+    react = meta.get("react_count", 0)
+    if react > 0:
+        badges.append(f'<span class="agentic-badge badge-react">♻️ {react} ReAct loops</span>')
+
+    # Validation
+    validation = meta.get("validation_result", "")
+    if "PASS" in validation.upper():
+        badges.append('<span class="agentic-badge badge-pass">✅ Validated</span>')
+    elif "FAIL" in validation.upper():
+        badges.append('<span class="agentic-badge badge-fail">❌ Validation Failed</span>')
+
+    return " ".join(badges)
 
 
 # ---------------------------------------------------------------------------
@@ -174,24 +221,39 @@ with st.sidebar:
     st.divider()
 
     # Live Trace
-    st.markdown('<p class="sidebar-section">📋 Live Trace</p>', unsafe_allow_html=True)
+    st.markdown('<p class="sidebar-section">📋 Agent Trace</p>', unsafe_allow_html=True)
 
     if st.session_state.traces:
-        # Show the most recent trace, with an expander for older ones
-        latest = st.session_state.traces[-1]
-        st.markdown(
-            f'<div class="trace-container">{latest}</div>',
-            unsafe_allow_html=True,
-        )
+        latest_trace = st.session_state.traces[-1]
+        latest_meta = st.session_state.trace_meta[-1] if st.session_state.trace_meta else {}
+
+        # Agentic status badges
+        status_html = agentic_status_html(latest_meta)
+        if status_html:
+            st.markdown(status_html, unsafe_allow_html=True)
+
+        # Tool badges
+        tools = latest_meta.get("tools", [])
+        if tools:
+            st.markdown(tool_badges_html(tools), unsafe_allow_html=True)
+
+        # Trace markdown rendered natively by Streamlit
+        st.markdown(latest_trace)
 
         if len(st.session_state.traces) > 1:
             with st.expander(f"📜 Previous traces ({len(st.session_state.traces) - 1})"):
                 for i, t in enumerate(reversed(st.session_state.traces[:-1])):
-                    st.markdown(f"**Turn {len(st.session_state.traces) - 1 - i}**")
+                    idx = len(st.session_state.traces) - 1 - i
+                    meta_i = st.session_state.trace_meta[idx - 1] if idx - 1 < len(st.session_state.trace_meta) else {}
+                    st.markdown(f"**Turn {idx}**")
+                    # Show badges for old traces too
+                    old_tools = meta_i.get("tools", [])
+                    if old_tools:
+                        st.markdown(tool_badges_html(old_tools), unsafe_allow_html=True)
                     st.markdown(t)
                     st.divider()
     else:
-        st.info("Ask a question to see the agent's reasoning trace here.")
+        st.info("Ask a question to see the agent's per-step reasoning trace here.")
 
     st.divider()
 
@@ -205,6 +267,7 @@ with st.sidebar:
             st.session_state.session_id = str(uuid.uuid4())
             st.session_state.messages = []
             st.session_state.traces = []
+            st.session_state.trace_meta = []
             st.rerun()
     with col2:
         if st.button("🗑️ Clear", use_container_width=True):
@@ -217,6 +280,7 @@ with st.sidebar:
                 pass
             st.session_state.messages = []
             st.session_state.traces = []
+            st.session_state.trace_meta = []
             st.rerun()
 
 
@@ -282,11 +346,14 @@ if prompt := st.chat_input("Ask about plans, providers, or policies..."):
                 trace_md = data.get("trace_markdown", "")
                 tools = data.get("tools_used", [])
                 trace_id = data.get("trace_id", "")
+                retry_count = data.get("retry_count", 0)
+                react_count = data.get("react_count", 0)
+                validation_result = data.get("validation_result", "")
 
                 # Display answer
                 st.markdown(answer)
 
-                # Tool badges
+                # Tool badges + agentic status
                 if tools and st.session_state.show_reasoning:
                     st.markdown(tool_badges_html(tools), unsafe_allow_html=True)
                     st.caption(f"Trace: `{trace_id[:8]}...`")
@@ -298,6 +365,14 @@ if prompt := st.chat_input("Ask about plans, providers, or policies..."):
                     "tools": tools,
                 })
                 st.session_state.traces.append(trace_md)
+                st.session_state.trace_meta.append({
+                    "tools": tools,
+                    "trace_id": trace_id,
+                    "retry_count": retry_count,
+                    "react_count": react_count,
+                    "validation_result": validation_result,
+                    "trace_markdown": trace_md,
+                })
 
                 # Trigger sidebar update
                 st.rerun()

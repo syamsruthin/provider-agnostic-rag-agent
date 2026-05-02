@@ -1,88 +1,58 @@
 """
-Router Agent — Query Rewrite + LLM-based Tool Routing
-=======================================================
-1. Rewrites the user query (de-aliases state names, normalizes terms).
-2. Routes to the appropriate tool(s) via Groq LLM.
+Router Agent — LLM Query Rewrite + LLM-based Tool Routing
+============================================================
+1. Rewrites the user query via LLM (normalizes terms, de-aliases, clarifies).
+2. Routes to the appropriate tool(s) via the configured LLM provider.
 3. Returns routing decision with reasoning.
 """
 
 import json
-import re
 
-from groq import Groq
-
-from backend.core.config import GROQ_API_KEY, GROQ_MODEL, ROUTER_SYSTEM_PROMPT
+from backend.core.llm import llm_completion
+from backend.core.config import ROUTER_SYSTEM_PROMPT, REWRITER_SYSTEM_PROMPT
 
 
 # ---------------------------------------------------------------------------
-# Query Re-writer: de-alias state names, normalize medical terms
+# Query Re-writer: LLM-based normalization
 # ---------------------------------------------------------------------------
-STATE_ALIASES = {
-    "alabama": "AL", "alaska": "AK", "arizona": "AZ", "arkansas": "AR",
-    "california": "CA", "colorado": "CO", "connecticut": "CT", "delaware": "DE",
-    "florida": "FL", "georgia": "GA", "hawaii": "HI", "idaho": "ID",
-    "illinois": "IL", "indiana": "IN", "iowa": "IA", "kansas": "KS",
-    "kentucky": "KY", "louisiana": "LA", "maine": "ME", "maryland": "MD",
-    "massachusetts": "MA", "michigan": "MI", "minnesota": "MN",
-    "mississippi": "MS", "missouri": "MO", "montana": "MT", "nebraska": "NE",
-    "nevada": "NV", "new hampshire": "NH", "new jersey": "NJ",
-    "new mexico": "NM", "new york": "NY", "north carolina": "NC",
-    "north dakota": "ND", "ohio": "OH", "oklahoma": "OK", "oregon": "OR",
-    "pennsylvania": "PA", "rhode island": "RI", "south carolina": "SC",
-    "south dakota": "SD", "tennessee": "TN", "texas": "TX", "utah": "UT",
-    "vermont": "VT", "virginia": "VA", "washington": "WA",
-    "west virginia": "WV", "wisconsin": "WI", "wyoming": "WY",
-}
 
-TERM_ALIASES = {
-    "primary care": "PCP",
-    "primary care physician": "PCP",
-    "family doctor": "PCP",
-    "general practitioner": "PCP",
-    "heart doctor": "Cardiologist",
-    "skin doctor": "Dermatologist",
-    "bone doctor": "Orthopedic Surgeon",
-    "brain doctor": "Neurologist",
-    "eye doctor": "Ophthalmologist",
-    "children's doctor": "Pediatrician",
-    "child doctor": "Pediatrician",
-    "stomach doctor": "Gastroenterologist",
-    "lung doctor": "Pulmonologist",
-    "ear nose throat": "ENT Specialist",
-    "ent": "ENT Specialist",
-}
-
-
-def rewrite_query(query: str) -> str:
+def rewrite_query(query: str, history_context: str = "") -> str:
     """
-    De-alias the user query:
-    - Replace full state names with 2-letter abbreviations.
-    - Replace colloquial medical terms with exact specialty names.
-    Returns the rewritten query.
+    Use the LLM to rewrite/normalize the user query:
+    - Contextualize pronouns ('those', 'it') using history_context.
+    - Replace full US state names with 2-letter abbreviations.
+    - Replace colloquial medical terms with exact specialty names
+      (e.g., "heart doctor" → "Cardiologist").
+    - Fix typos, expand abbreviations, and clarify ambiguous phrasing.
+    - Preserve the original intent — do NOT answer the question.
+
+    Returns the rewritten query string.
+    Falls back to the original query if the LLM call fails.
     """
-    rewritten = query
+    try:
+        user_content = query
+        if history_context:
+            user_content = f"CONVERSATION HISTORY:\n{history_context}\n\nCURRENT QUERY: {query}"
 
-    # Replace state names (case-insensitive, whole-word boundaries)
-    for full_name, abbrev in STATE_ALIASES.items():
-        pattern = re.compile(r"\b" + re.escape(full_name) + r"\b", re.IGNORECASE)
-        rewritten = pattern.sub(abbrev, rewritten)
-
-    # Replace medical term aliases (case-insensitive)
-    for alias, canonical in TERM_ALIASES.items():
-        pattern = re.compile(r"\b" + re.escape(alias) + r"\b", re.IGNORECASE)
-        rewritten = pattern.sub(canonical, rewritten)
-
-    return rewritten
+        rewritten = llm_completion(
+            messages=[
+                {"role": "system", "content": REWRITER_SYSTEM_PROMPT},
+                {"role": "user", "content": user_content},
+            ],
+            temperature=0,
+            max_tokens=256,
+        )
+        # Guard: if the LLM returns an empty string, fall back
+        return rewritten if rewritten else query
+    except Exception:
+        # On any LLM failure, return the original query unchanged
+        return query
 
 
 # ---------------------------------------------------------------------------
 # Router: LLM-based tool selection
 # ---------------------------------------------------------------------------
 VALID_TOOLS = {"SQL_TOOL", "CSV_TOOL", "RAG_TOOL", "MULTI_TOOL"}
-
-
-def _get_groq_client() -> Groq:
-    return Groq(api_key=GROQ_API_KEY)
 
 
 def route_query(user_query: str) -> dict:
@@ -96,9 +66,7 @@ def route_query(user_query: str) -> dict:
             - tools_list: for MULTI_TOOL, list of individual tools to invoke
             - error: error message if routing failed
     """
-    client = _get_groq_client()
-    response = client.chat.completions.create(
-        model=GROQ_MODEL,
+    raw = llm_completion(
         messages=[
             {"role": "system", "content": ROUTER_SYSTEM_PROMPT},
             {"role": "user", "content": user_query},
@@ -106,7 +74,6 @@ def route_query(user_query: str) -> dict:
         temperature=0,
         max_tokens=256,
     )
-    raw = response.choices[0].message.content.strip()
 
     # Parse JSON response
     try:
