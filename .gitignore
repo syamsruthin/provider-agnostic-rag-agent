@@ -48,3 +48,6 @@ Thumbs.db
 
 # Streamlit
 .streamlit/
+
+# Docs
+STAKEHOLDER_DEMO.md
